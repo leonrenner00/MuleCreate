@@ -26,21 +26,22 @@ def nearest_axis_back(back):
     return max((np.array(a, float) for _, a in AXIS_VIEWS), key=lambda a: float(a @ back))
 
 
-AXIS_SNAP_RAD_PER_PX = 0.02  # Alt orbit snap: ~40 px of drag leaves an axis view (45°), a few px stay put
+AXIS_SNAP_MIN_PX = 36.0  # Alt orbit snap: a shorter drag is no gesture, the view stays as it was
 
 
 def axis_snap_back(start_rot, acc_dx, acc_dy):
-    """World axis an Alt orbit lands on after a drag of (acc_dx, acc_dy) px in total.
-    The whole drag swings the START view along a great circle of its own basis (columns right, up, back), so the
-    drag passes on through the axis views (Front -> Right -> Back -> Left ...) also when it began in one. Same
-    direction as Camera.orbit: drag right moves the camera toward -right, drag down (screen +y) toward +up."""
-    right0, up0, back0 = start_rot[:, 0], start_rot[:, 1], start_rot[:, 2]
+    """World axis an Alt orbit gesture lands on after a drag of (acc_dx, acc_dy) px in total, or None under
+    AXIS_SNAP_MIN_PX (the view stays as it was). Only the drag's DIRECTION counts, not how far it goes: it swings the
+    START view exactly 90 degrees along a great circle of its own basis (columns right, up, back) - cos 90 = 0, so the
+    swung back is the swing direction itself - and takes the nearest axis. One gesture reaches one neighbour axis,
+    never a second one. Same direction as Camera.orbit: drag right moves the camera toward -right, drag down
+    (screen +y) toward +up."""
+    right0, up0 = start_rot[:, 0], start_rot[:, 1]
     length = math.hypot(acc_dx, acc_dy)
-    if length == 0.0:
-        return nearest_axis_back(back0)
+    if length < AXIS_SNAP_MIN_PX:
+        return None
     swing = (-acc_dx * right0 + acc_dy * up0) / length
-    angle = length * AXIS_SNAP_RAD_PER_PX
-    return nearest_axis_back(math.cos(angle) * back0 + math.sin(angle) * swing)
+    return nearest_axis_back(swing)
 
 
 class NavigationMixin:
@@ -95,16 +96,7 @@ class NavigationMixin:
             self._persp_view = self.cam.state()
         self.fly_to(self.cam.target, self.cam.dist, view_for_back(back))
         self._flight_ortho = True  # axis views are orthographic as in Houdini
-        plane = self.scene.active_plane
-        single = not self.multi_mode or [s for s in self._multi_surfaces()] == [plane]
-        if self.scene.active_mesh is None and plane.preset and single:
-            # only a ground plane was active: the ground plane that looks into this view (own ones stay active)
-            facing = max(self.scene.presets, key=lambda pl: abs(float(pl.normal @ back)))
-            if facing is not plane:
-                self.scene.activate(facing)
-                if self.multi_mode:
-                    self.scene.multi_ids = [facing.id]
-                self.notify(tr("Zeichnet auf: {0}").format(facing.name))
+        self._activate_view_plane(back)
 
 
     def snap_axis_view(self, back, animate=False):
@@ -123,39 +115,62 @@ class NavigationMixin:
             self.cam.set_state(self.cam.target, self.cam.dist, rot)
             self.cam.ortho = True
             self._flight_ortho = None
-        plane = self.scene.active_plane
-        single = not self.multi_mode or [s for s in self._multi_surfaces()] == [plane]
-        if self.scene.active_mesh is None and plane is not None and plane.preset and single:
-            facing = max(self.scene.presets, key=lambda pl: abs(float(pl.normal @ back)))
-            if facing is not plane:
-                self.scene.activate(facing)
-                if self.multi_mode:
-                    self.scene.multi_ids = [facing.id]
-                self.notify(tr("Zeichnet auf: {0}").format(facing.name))
+        self._activate_view_plane(back)
         self.update_view()
 
     def orbit_axis_snap(self, dx, dy):
-        """Alt orbit (Blender Alt during view rotate): instant orthographic world-axis view. The drag is summed from
-        the pose the snap began in (mousePress records it) and swung from there (axis_snap_back) – not orbited step
-        by step from the snapped pose, which a mouse step of 10-20 px could never leave."""
+        """Alt orbit drag (Blender Alt during view rotate), while the button is down: only sums the drag since the
+        pose the gesture began in (mousePress records it). The camera does not move; mouse release switches to the
+        one axis view the drag's direction picked (commit_axis_snap)."""
         start = self._orbit_snap_start
-        if start is None or self.cam.rot is not getattr(self, "_orbit_snap_rot", self.cam.rot):
-            # Alt came during the drag, or the camera turned freely since the last snap (Alt let go): begin here
-            start = self._orbit_snap_start = self.cam.state()
+        if start is None or not np.array_equal(self.cam.rot, start[2]):
+            # Alt came during the drag, or the camera turned freely since the start pose (Alt let go): begin here
+            self._orbit_snap_start = self.cam.state()
             self._orbit_snap_acc = [0.0, 0.0]
-        if self._persp_view is None and not self.cam.ortho:
-            self._persp_view = self.cam.state()
         self._orbit_snap_acc[0] += dx
         self._orbit_snap_acc[1] += dy
-        target, dist, rot0 = start
-        axis = axis_snap_back(rot0, *self._orbit_snap_acc)
-        rot = view_for_back(axis)
-        self.cam.set_state(target.copy(), dist, rot)  # copy: set_state keeps the array, the start must stay intact
+
+    def _activate_view_plane(self, back):
+        """Preset drawing plane that faces this axis view. Same rule as Space+number."""
+        scene = getattr(self, "scene", None)
+        if scene is None or scene.active_mesh is not None:
+            return
+        plane = scene.active_plane
+        if plane is None or not plane.preset:
+            return
+        if self.multi_mode and self._multi_surfaces() != [plane]:
+            return
+        back = np.asarray(back, float)
+        facing = max(scene.presets, key=lambda pl: abs(float(pl.normal @ back)))
+        if facing is plane:
+            return
+        scene.activate(facing)
+        if self.multi_mode:
+            scene.multi_ids = [facing.id]
+        self.notify(tr("Zeichnet auf: {0}").format(facing.name))
+        changed = getattr(self, "scene_changed", None)
+        if changed is not None:
+            changed.emit()
+        # The active-plane tint lives in the cached draw lists. A camera-only redraw would keep the old plane.
+        refresh = getattr(self, "update", None)
+        if refresh is not None:
+            refresh()
+
+    def commit_axis_snap(self):
+        """Mouse release of an Alt orbit: switch instantly (orthographic, no flight) to the one axis view the summed
+        drag's direction picked (axis_snap_back). The view stays as it was if no Alt drag was summed, the drag stayed
+        under AXIS_SNAP_MIN_PX, or the camera turned freely after the start pose (Alt let go mid-drag)."""
+        start = self._orbit_snap_start
+        if start is None or not np.array_equal(self.cam.rot, start[2]):
+            return
+        axis = axis_snap_back(start[2], *self._orbit_snap_acc)
+        if axis is None:
+            return
+        if self._persp_view is None and not self.cam.ortho:
+            self._persp_view = self.cam.state()
+        self.cam.set_state(self.cam.target, self.cam.dist, view_for_back(axis))
         self.cam.ortho = True
-        self._orbit_snap_rot = rot
-        prev = getattr(self, "_orbit_snap_axis", None)
-        if prev is None or float(np.linalg.norm(prev - axis)) > 1e-6:
-            self._orbit_snap_axis = axis.copy()
+        self._activate_view_plane(axis)
 
     def perspective_view(self):
         """Space + 1 as in Houdini: back to the free view before the last axis view."""

@@ -874,6 +874,8 @@ class Viewport(SelectionMixin, PickingMixin, ComponentEditMixin, FreeDrawMixin, 
             self._changed()
             return
         if self._mode in NAV_MODES:  # camera released: nothing has changed in the scene
+            if self._mode == "orbit":
+                self.commit_axis_snap()  # Alt orbit: switch now to the one axis view the drag's direction picked
             self._orbit_alt_snap = False
             self._orbit_snap_axis = None
             self._mode = None
