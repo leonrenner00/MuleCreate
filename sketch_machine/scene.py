@@ -2170,7 +2170,7 @@ class Scene(SurfaceSyncMixin):
     def _has_timing(self):
         """Anything to save in timing? Scenes without timing stay unchanged."""
         t = self.timing
-        return bool(t.notes or t.cams or t.global_note.board or timing.flipbook_planes(self)
+        return bool(t.notes or t.cams or t.motions or t.global_note.board or timing.flipbook_planes(self)
                     or (t.start, t.end, t.fps, t.frame) != (timing.START, timing.END, timing.FPS, timing.START))
 
     def new_flipbook(self, origin, axis_u, axis_v):

@@ -92,10 +92,46 @@ def _global_note():
     return Note("Global", np.zeros(3))
 
 
+# Target kinds for motion beats (timeline spans that bind a component + motion intent).
+MOTION_KINDS = ("null", "stroke", "mesh", "plane", "surface")
+
+
+@dataclass(eq=False)
+class MotionBeat:
+    """First-class timeline span: bind a scene component (or aircraft/null proxy) to a frame range,
+    describe the motion with annotation + text, optionally follow a sketch/flipbook path, and store
+    a camera angle for shot planning. Pure intent data – no interpolated keyframe animation yet."""
+    start: int
+    end: int
+    target_kind: str = "null"  # MOTION_KINDS
+    target_id: int | None = None  # None = free aircraft/part proxy
+    annotation: str = ""  # short label on the timeline row
+    text: str = ""  # longer motion-intent description
+    path_stroke_id: int | None = None  # stroke whose curves define the flight path
+    path_plane_id: int | None = None  # flipbook plane: held drawing curves as path
+    camera: dict | None = None  # {target, dist, rot, mm} – planning angle for this beat
+    id: int = field(default_factory=_new_id)
+
+    def clamp_range(self, tm):
+        self.start = tm.clamp(min(self.start, self.end))
+        self.end = tm.clamp(max(self.start, self.end))
+        return self
+
+    def covers(self, frame):
+        f = int(frame)
+        return self.start <= f <= self.end
+
+    def progress(self, frame):
+        """0..1 along the beat (held at ends)."""
+        span = max(int(self.end) - int(self.start), 1)
+        return float(min(max(int(frame) - int(self.start), 0), span)) / span
+
+
 @dataclass(eq=False)
 class Timing:
     """Shots: range, frame, cameras and shot notes. Shot notes are notes like in the Notes tab (scene.Note:
-    heading in space, leader lines to the flipbook planes, board) – only their own, separate from the normal ones."""
+    heading in space, leader lines to the flipbook planes, board) – only their own, separate from the normal ones.
+    Motion beats (Calisto Create timeline slice) bind components to spans with path + camera planning."""
     start: int = START
     end: int = END
     fps: int = FPS
@@ -106,9 +142,21 @@ class Timing:
     notes: list = field(default_factory=list)  # shot notes (scene.Note)
     global_note: object = field(default_factory=_global_note)  # global shot note ("Global" panel, not in space)
     cams: list = field(default_factory=list)  # TimingCam, each attached to a note (cam.note)
+    motions: list = field(default_factory=list)  # MotionBeat – component/path/camera planning spans
+    active_motion: int | None = None  # id of the beat selected in the timeline
 
     def all_notes(self):
         return [self.global_note] + list(self.notes)
+
+    def motion_by_id(self, mid):
+        return next((m for m in self.motions if m.id == mid), None)
+
+    def motion_at(self, frame):
+        """Beats that cover frame, earliest start first."""
+        return [m for m in sorted(self.motions, key=lambda x: (x.start, x.id)) if m.covers(frame)]
+
+    def active_beat(self):
+        return self.motion_by_id(self.active_motion) if self.active_motion is not None else None
 
     def note_by_id(self, nid):
         return next((n for n in self.all_notes() if n.id == nid), None)
@@ -375,6 +423,192 @@ def add_blank_key(plane, frame):
     plane.blank_keys = sorted(set(plane.blank_keys) | {int(frame)})
 
 
+# --- Motion beats (component bind + path + camera planning) -----------------
+def _kind_of(obj):
+    """Classify a scene object for MotionBeat.target_kind."""
+    from .scene import MeshObject, NullObject, Plane, StrokeObject, SurfaceObject
+    if obj is None:
+        return "null"
+    if isinstance(obj, NullObject):
+        return "null"
+    if isinstance(obj, MeshObject):
+        return "mesh"
+    if isinstance(obj, SurfaceObject):
+        return "surface"
+    if isinstance(obj, StrokeObject):
+        return "stroke"
+    if isinstance(obj, Plane):
+        return "plane"
+    return "null"
+
+
+def resolve_bind_target(scene, selection_ids=None):
+    """Pick (kind, id, label) from selection / active objects. Defaults to a free null proxy."""
+    ids = list(selection_ids or [])
+    for oid in ids:
+        obj = scene.object_by_id(oid)
+        if obj is None:
+            continue
+        # Flipbook planes stay drawing surfaces – bind the stroke/mesh/null instead when possible.
+        if getattr(obj, "flipbook", False):
+            continue
+        if getattr(obj, "flipbook", None) is not None and getattr(obj, "curves", None) is not None:
+            # stroke owned by a flipbook: usable as a path source, but prefer non-flip as target
+            pass
+        kind = _kind_of(obj)
+        name = getattr(obj, "name", None) or f"{kind} {oid}"
+        return kind, obj.id, name
+    mesh = scene.active_mesh
+    if mesh is not None:
+        return "mesh", mesh.id, getattr(mesh, "name", "Mesh")
+    stroke = scene.active_stroke
+    if stroke is not None and getattr(stroke, "flipbook", None) is None:
+        return "stroke", stroke.id, getattr(stroke, "name", "Stroke")
+    plane = scene.active_plane
+    if plane is not None and not getattr(plane, "flipbook", False) and plane not in getattr(scene, "presets", ()):
+        return "plane", plane.id, getattr(plane, "name", "Plane")
+    return "null", None, "Proxy"
+
+
+def new_motion(tm, start, end, kind="null", target_id=None, annotation="", text=""):
+    beat = MotionBeat(int(start), int(end), kind if kind in MOTION_KINDS else "null",
+                      None if target_id is None else int(target_id),
+                      (annotation or "").strip(), (text or "").strip())
+    beat.clamp_range(tm)
+    tm.motions.append(beat)
+    tm.active_motion = beat.id
+    return beat
+
+
+def bind_selection(scene, selection_ids=None, start=None, end=None, annotation="", text=""):
+    """Create a motion beat for the current selection (or null proxy) spanning start..end."""
+    tm = scene.timing
+    start = tm.frame if start is None else int(start)
+    end = min(tm.end, start + max(tm.fps, 1) - 1) if end is None else int(end)
+    kind, tid, label = resolve_bind_target(scene, selection_ids)
+    ann = annotation.strip() if annotation else label
+    return new_motion(tm, start, end, kind, tid, ann, text)
+
+
+def set_motion_path(beat, scene, stroke_id=None, plane_id=None):
+    """Attach a path source: a stroke and/or a flipbook plane (held drawing)."""
+    beat.path_stroke_id = int(stroke_id) if stroke_id is not None else None
+    beat.path_plane_id = int(plane_id) if plane_id is not None else None
+    if beat.path_stroke_id is None and beat.path_plane_id is None:
+        # Convenience: selected/active stroke, else active flipbook plane
+        stroke = scene.active_stroke
+        if stroke is not None:
+            beat.path_stroke_id = stroke.id
+        elif scene.active_plane is not None and scene.active_plane.flipbook:
+            beat.path_plane_id = scene.active_plane.id
+    return beat
+
+
+def capture_motion_camera(beat, state, mm):
+    """Store the viewport camera angle for shot planning on this beat."""
+    target, dist, rot = state
+    beat.camera = {"target": _r(target), "dist": round(float(dist), 6),
+                   "rot": _r(rot), "mm": round(float(mm), 4)}
+    return beat
+
+
+def camera_state(beat):
+    """(target, dist, rot, mm) from a stored beat camera, or None."""
+    cam = beat.camera
+    if not cam:
+        return None
+    return (np.array(cam["target"], float), float(cam["dist"]),
+            np.array(cam["rot"], float).reshape(3, 3), float(cam.get("mm", 35.0)))
+
+
+def _curve_points(curves):
+    """Concatenate curve polylines into one path (skip tiny stubs)."""
+    pts = []
+    for c in curves:
+        p = np.asarray(c.points, float)
+        if len(p) < 2:
+            continue
+        if pts and np.allclose(pts[-1], p[0], atol=1e-5):
+            pts.extend(p[1:].tolist())
+        else:
+            pts.extend(p.tolist())
+    return np.asarray(pts, float) if pts else np.zeros((0, 3))
+
+
+def path_points(scene, beat, frame=None):
+    """World-space polyline for a beat: from path stroke, else flipbook held drawing, else empty."""
+    curves = []
+    t = scene.timing.frame if frame is None else int(frame)
+    if beat.path_stroke_id is not None:
+        stroke = scene.object_by_id(beat.path_stroke_id)
+        if stroke is not None and getattr(stroke, "curves", None) is not None:
+            always = [c for c in stroke.curves if c.frame is None]
+            timed = [c for c in stroke.curves if c.frame is not None]
+            if timed:
+                frames = sorted({int(c.frame) for c in timed})
+                held = held_key(frames, t)
+                curves = [c for c in timed if c.frame == held] if held is not None else []
+            if not curves:
+                curves = always
+            if not curves:
+                curves = list(stroke.curves)
+    if not curves and beat.path_plane_id is not None:
+        shown = shown_keys(scene, t).get(beat.path_plane_id)
+        if shown is not None:
+            curves = [c for _, c in key_curves(scene, beat.path_plane_id, shown)]
+        else:
+            keys = flip_keys(scene).get(beat.path_plane_id, [])
+            if keys:
+                curves = [c for _, c in key_curves(scene, beat.path_plane_id, keys[0])]
+    return _curve_points(curves)
+
+
+def _arc_resample(pts, u):
+    """Point at normalized arc-length u in [0, 1] along polyline pts."""
+    if len(pts) == 0:
+        return None
+    if len(pts) == 1:
+        return pts[0].copy()
+    seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    total = float(seg.sum())
+    if total < 1e-12:
+        return pts[0].copy()
+    dist = float(np.clip(u, 0.0, 1.0)) * total
+    acc = 0.0
+    for i, length in enumerate(seg):
+        if acc + length >= dist - 1e-12:
+            t = 0.0 if length < 1e-12 else (dist - acc) / length
+            return pts[i] * (1 - t) + pts[i + 1] * t
+        acc += length
+    return pts[-1].copy()
+
+
+def proxy_at(scene, beat, frame):
+    """World position of the aircraft/part proxy along the beat path at frame, or None if no path."""
+    pts = path_points(scene, beat, frame=frame)
+    if len(pts) == 0:
+        return None
+    return _arc_resample(pts, beat.progress(frame))
+
+
+def target_label(scene, beat):
+    if beat.annotation:
+        return beat.annotation
+    if beat.target_id is not None:
+        obj = scene.object_by_id(beat.target_id)
+        if obj is not None:
+            return getattr(obj, "name", None) or f"{beat.target_kind} {beat.target_id}"
+    return "Proxy" if beat.target_kind == "null" else beat.target_kind
+
+
+def remove_motion(tm, beat):
+    if beat in tm.motions:
+        tm.motions.remove(beat)
+    if tm.active_motion == beat.id:
+        tm.active_motion = tm.motions[-1].id if tm.motions else None
+    return True
+
+
 # --- Saving ---------------------------------------------------------------
 def _r(a, digits=6):
     return [round(float(x), digits) for x in np.ravel(a)]
@@ -388,9 +622,18 @@ def to_dict(timing):
                 "poses": [{"id": p.id, "frame": p.frame, "target": _r(p.target), "dist": round(float(p.dist), 6),
                            "rot": _r(p.rot), "mm": round(float(p.mm), 4)} for p in c.poses]}
 
+    def motion(m):
+        return {"id": m.id, "start": int(m.start), "end": int(m.end), "kind": m.target_kind,
+                "target": m.target_id, "annotation": m.annotation, "text": m.text,
+                **({"path_stroke": m.path_stroke_id} if m.path_stroke_id is not None else {}),
+                **({"path_plane": m.path_plane_id} if m.path_plane_id is not None else {}),
+                **({"camera": m.camera} if m.camera else {})}
+
     return {"start": timing.start, "end": timing.end, "fps": timing.fps, "frame": timing.frame,
             "cam_size": round(float(timing.cam_size), 4), "onion": bool(timing.onion), "interp": timing.interp,
-            "cams": [cam(c) for c in timing.cams]}
+            "cams": [cam(c) for c in timing.cams],
+            **({"motions": [motion(m) for m in timing.motions]} if timing.motions else {}),
+            **({"active_motion": timing.active_motion} if timing.active_motion is not None else {})}
 
 
 def from_dict(data):
@@ -409,11 +652,29 @@ def from_dict(data):
         used.extend([c.id] + [p.id for p in poses])
         return c
 
+    def motion(d):
+        kind = d.get("kind", "null")
+        if kind not in MOTION_KINDS:
+            kind = "null"
+        m = MotionBeat(int(d.get("start", START)), int(d.get("end", START)), kind,
+                       None if d.get("target") is None else int(d["target"]),
+                       d.get("annotation", "") or "", d.get("text", "") or "",
+                       None if d.get("path_stroke") is None else int(d["path_stroke"]),
+                       None if d.get("path_plane") is None else int(d["path_plane"]),
+                       d.get("camera"), int(d.get("id", 0)) or _new_id())
+        used.append(m.id)
+        return m
+
     t = Timing(int(data.get("start", START)), int(data.get("end", END)), int(data.get("fps", FPS)),
                int(data.get("frame", START)), float(data.get("cam_size", 1.0)), bool(data.get("onion", True)))
     t.frame = t.clamp(t.frame)
     t.interp = data.get("interp", "step") if data.get("interp") in ("step", "linear") else "step"
     t.cams = [cam(c) for c in data.get("cams", []) if c.get("poses")]
+    t.motions = [motion(m) for m in data.get("motions", [])]
+    for m in t.motions:
+        m.clamp_range(t)
+    am = data.get("active_motion")
+    t.active_motion = int(am) if am is not None and t.motion_by_id(int(am)) else (t.motions[-1].id if t.motions else None)
     legacy = []
     if "cams" not in data:  # first prototype
         for d, glob in [(data.get("global_note") or {}, True)] + [(n, False) for n in data.get("notes", [])]:

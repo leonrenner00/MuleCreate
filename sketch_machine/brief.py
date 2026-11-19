@@ -2168,7 +2168,14 @@ def _export_videos(scene, folder):
 # MCP tools for the AI in the brief folder: the entries from the repo (.mcp.json for Claude Code, .codex/config.toml
 # for Codex) - a session in the brief folder has the same tools, without repo and project memory (blind test)
 TOOL_CONFIG_DIR = paths.tool_config_dir()
-SKETCH_MCP_URL = "http://127.0.0.1:8770/mcp"  # = mcp_server.PORT
+def _sketch_mcp_url():
+    """Live MCP URL (Calisto neighbor default :8772 via SKETCH_MACHINE_MCP_PORT / mcp_server.PORT)."""
+    from . import mcp_server
+    return f"http://127.0.0.1:{mcp_server.PORT}/mcp"
+
+
+# Kept for callers that still read the name; prefer _sketch_mcp_url() at write time.
+SKETCH_MCP_URL = "http://127.0.0.1:8772/mcp"
 
 
 def _toml_value(v):
@@ -2220,9 +2227,12 @@ def write_tool_config(folder, source=None):
             return {}
 
     claude = dict(read_json(os.path.join(source, ".mcp.json")).get("mcpServers") or {})
-    claude.setdefault("sketch_machine", {"type": "http", "url": SKETCH_MCP_URL})
+    url = _sketch_mcp_url()
+    claude.setdefault("sketch_machine", {"type": "http", "url": url})
+    # Always rewrite sketch_machine URL so a Calisto neighbor port change is not sticky from an old export.
+    claude["sketch_machine"] = {"type": "http", "url": url}
     codex = dict(read_toml(os.path.join(source, ".codex", "config.toml")).get("mcp_servers") or {})
-    codex.setdefault("sketch_machine", {"url": SKETCH_MCP_URL})
+    codex["sketch_machine"] = {"url": url}
     path = os.path.join(folder, ".mcp.json")
     data = read_json(path)
     data.setdefault("mcpServers", {}).update(claude)

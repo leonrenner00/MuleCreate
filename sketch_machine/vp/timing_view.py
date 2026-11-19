@@ -111,7 +111,7 @@ class TimingViewMixin:
             if ws.draw_tool not in ("pen", "brush", "eraser"):
                 ws.draw_tool = "brush"
             self._timing_pick_layer()
-            self.notify(tr("Shots: Space+N legt eine Flipbook-Ebene an · Doppelklick: Shot-Notiz · ←/→ Frame · ↑/↓ Zeichnung · Alt+A abspielen"))
+            self.notify(tr("Shots: Space+N Flipbook · Doppelklick Shot-Notiz · Timeline: Bind/Pfad/Kamera · ←/→ Frame · Alt+A abspielen"))
         else:
             self._leave_timing()
         self.toggles_changed.emit()
@@ -709,8 +709,53 @@ class TimingViewMixin:
             if cam.id == self._look:
                 continue  # the one you look through does not show itself
             self._draw_cam_symbol(p, cam, t, tm)
+        self._draw_motions(p, tm, t)
         if self._look is not None:
             self._draw_viewfinder(p)
+
+    def _draw_motions(self, p, tm, t):
+        """Overlay: path polyline + proxy marker for motion beats covering this frame (planning, not bake)."""
+        active = tm.active_beat()
+        beats = list(tm.motion_at(t))
+        if active is not None and active not in beats:
+            beats.append(active)
+        for beat in beats:
+            pts = timing.path_points(self.scene, beat, frame=t)
+            chosen = tm.active_motion == beat.id
+            col = QColor(208, 138, 94) if chosen else QColor(94, 148, 168)
+            if len(pts) >= 2:
+                c = QColor(col)
+                c.setAlpha(200 if chosen or beat.covers(t) else 90)
+                p.setPen(QPen(c, 2.0 if chosen else 1.3, Qt.DashLine))
+                self.draw_polyline(p, pts)
+            pos = timing.proxy_at(self.scene, beat, t) if beat.covers(t) else None
+            if pos is None and len(pts):
+                pos = pts[0]
+            if pos is not None and beat.covers(t):
+                size = max(float(np.linalg.norm(self.cam.target - self.cam.eye)) * 0.02, 0.05)
+                diamond = np.array([pos + (size, 0, 0), pos + (0, size, 0), pos + (-size, 0, 0),
+                                    pos + (0, -size, 0), pos + (size, 0, 0)])
+                p.setPen(QPen(col, 2.0))
+                self.draw_polyline(p, diamond)
+                screen, ok = self.project(np.asarray(pos, float)[None])
+                if ok[0]:
+                    label = beat.annotation or timing.target_label(self.scene, beat)
+                    if beat.text:
+                        label = f"{label} — {beat.text[:40]}"
+                    self._label_at(p, screen[0], label, col)
+            # Stored planning camera: pale frustum at the beat start
+            state = timing.camera_state(beat)
+            if state is not None and (chosen or beat.covers(t)):
+                target, dist, rot, mm = state
+                pose = timing.Pose(beat.start, target, dist, rot, mm)
+                size = timing.base_size(pose) * tm.cam_size * 0.7
+                eye, corners = timing.frustum(pose, size)
+                c = QColor(col)
+                c.setAlpha(110)
+                p.setPen(QPen(c, 1.2, Qt.DotLine))
+                for corner in corners:
+                    self.draw_polyline(p, np.array([eye, corner]))
+                self.draw_polyline(p, np.array(corners + corners[:1]))
 
     def _draw_cam_symbol(self, p, cam, t, tm):
         col = QColor.fromRgbF(*cam.rgb)

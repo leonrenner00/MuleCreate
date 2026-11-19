@@ -1506,6 +1506,58 @@ EN = {
         'Timeline',
     'Shots (Prototyp): Flipbook-Ebenen über die Zeit bemalen, Shot-Notizen mit Kameras – keine Keyframe-Animation':
         'Shots (prototype): paint flipbook layers over time, shot notes with cameras – no keyframe animation',
+    'Shots: Flipbook, Shot-Notizen, Kameras – plus Motion-Spannen (Bind, Pfad, Kamerawinkel)':
+        'Shots: flipbook, shot notes, cameras – plus motion spans (bind, path, camera angle)',
+    'Shots: Space+N Flipbook · Doppelklick Shot-Notiz · Timeline: Bind/Pfad/Kamera · ←/→ Frame · Alt+A abspielen':
+        'Shots: Space+N flipbook · double-click shot note · Timeline: Bind/Path/Camera · ←/→ frame · Alt+A play',
+    'Motion':
+        'Motion',
+    'Bind':
+        'Bind',
+    'Auswahl (Null/Stroke/Mesh/Plane) an eine Timeline-Spanne binden – ab aktuellem Frame':
+        'Bind selection (null/stroke/mesh/plane) to a timeline span – from the current frame',
+    'Pfad':
+        'Path',
+    'Pfad aus aktivem Stroke oder Flipbook-Zeichnung für die gewählte Motion setzen':
+        'Set path from the active stroke or flipbook drawing for the selected motion',
+    'Kamera':
+        'Camera',
+    'Aktuelle Viewport-Kamera als Planungswinkel für die Motion speichern':
+        'Store the current viewport camera as the planning angle for the motion',
+    'Vorschau':
+        'Preview',
+    'Gespeicherten Planungswinkel der aktiven Motion anschauen (Esc lässt die Shot-Kamera)':
+        'Preview the stored planning angle of the active motion (Esc leaves a shot camera)',
+    'Löschen':
+        'Delete',
+    'Aktive Motion löschen':
+        'Delete the active motion',
+    'Annotation':
+        'Annotation',
+    'Kurzlabel der Motion':
+        'Short label for the motion',
+    'Text':
+        'Text',
+    'Bewegungsabsicht – was macht das Teil hier?':
+        'Motion intent – what does the part do here?',
+    'Keine Motion – Bind bindet Auswahl an Span':
+        'No motion – Bind attaches the selection to a span',
+    'Erst eine Motion wählen oder mit Bind anlegen':
+        'First select a motion or create one with Bind',
+    'Motion gebunden: {0} ({1}–{2})':
+        'Motion bound: {0} ({1}–{2})',
+    'Kein Pfad – Stroke wählen oder Flipbook bemalen':
+        'No path – select a stroke or paint on a flipbook',
+    'Pfad gesetzt ({0} Punkte)':
+        'Path set ({0} points)',
+    'Kamerawinkel für Motion gespeichert ({0} mm)':
+        'Camera angle for motion stored ({0} mm)',
+    'Diese Motion hat noch keinen Kamerawinkel – Kamera drücken':
+        'This motion has no camera angle yet – press Camera',
+    'Vorschau: Planungswinkel von „{0}“':
+        'Preview: planning angle of “{0}”',
+    'Motion löschen':
+        'Delete motion',
     'Abspielen / Anhalten (Alt+A) – jeder Frame wird gezeigt':
         'Play / stop (Alt+A) – every frame is shown',
     'Aktueller Frame (←/→, ↑/↓ springt zur nächsten Zeichnung)':

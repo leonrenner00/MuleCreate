@@ -499,7 +499,7 @@ class MainWindow(QMainWindow):
         self.notes_mode_action = QAction(tr("Notizen"), self, checkable=True)
         self.notes_mode_action.setToolTip(tr("Notizen (N): Überschriften im Raum, mit Hinweislinien an Linien und Punkten, dahinter ein Notizbrett mit Text und Bildern – lokale Prompts"))
         self.timing_mode_action = QAction("Shots", self, checkable=True)
-        self.timing_mode_action.setToolTip(tr("Shots (Prototyp): Flipbook-Ebenen über die Zeit bemalen, Shot-Notizen mit Kameras – keine Keyframe-Animation"))
+        self.timing_mode_action.setToolTip(tr("Shots: Flipbook, Shot-Notizen, Kameras – plus Motion-Spannen (Bind, Pfad, Kamerawinkel)"))
         for a in (self.draw_mode_action, self.select_action, self.notes_mode_action, self.timing_mode_action):
             modes.addAction(a)
             top.addAction(a)
@@ -1815,7 +1815,7 @@ def make_window(app):
         from . import selftest
         sys.exit(selftest.run(window, app, sys.argv[sys.argv.index("--selftest") + 1]))
     from . import mcp_server
-    window.mcp = mcp_server.start(window)  # Claude (subscription) sees the scene: http://127.0.0.1:8770/mcp
+    window.mcp = mcp_server.start(window)  # Claude sees the scene at http://127.0.0.1:<PORT>/mcp (PORT from mcp_server)
     assoc.register()  # double-click on a .mule scene opens this Mule (Windows only, per user)
     return window
 

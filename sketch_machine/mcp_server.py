@@ -3,7 +3,7 @@ what was clarified back – like fxhoudinimcp for Houdini. Runs in the app proce
 Streamable HTTP, answers as JSON); every tool runs in the Qt main thread.
 
 Hooking into Claude Code (.mcp.json): {"mcpServers": {"sketch_machine": {"type": "http",
-"url": "http://127.0.0.1:8770/mcp"}}}"""
+"url": "http://127.0.0.1:<port>/mcp"}}} (Calisto Studio neighbor default port 8772; Studio keeps 8770)."""
 import base64
 import json
 import os
@@ -14,7 +14,19 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from .i18n import tr
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QObject, Qt, Signal
 
-PORT = 8770
+# Calisto Studio neighbor pin: default off Studio dashboard :8770. Override with SKETCH_MACHINE_MCP_PORT.
+def _port_from_env(default=8772):
+    raw = (os.environ.get("SKETCH_MACHINE_MCP_PORT") or "").strip()
+    if not raw:
+        return default
+    try:
+        port = int(raw)
+    except ValueError:
+        return default
+    return port if 1 <= port <= 65535 else default
+
+
+PORT = _port_from_env()
 VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")  # the newest first
 IMAGE_MAX = 1568
 MOMENT_MAX = 800  # review_moment for checking: about a quarter of the image tokens; detail=true full size

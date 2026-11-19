@@ -1,7 +1,8 @@
-"""Shots mode: timeline (bottom) - prototype.
+"""Shots mode: timeline (bottom) - prototype + Calisto motion beats.
 
 Timeline: frames, playback (every frame is shown - the next only once the last image is drawn), one row per
-flipbook plane with its drawings (drag = change timing), on top the poses of the selected camera.
+flipbook plane with its drawings (drag = change timing), on top the poses of the selected camera, plus a
+Motions row for component binds / path / camera-angle planning spans.
 Shot notes and cameras live in the Shots panel - a note board like in the Notes tab (note_board.py).
 """
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer
@@ -16,6 +17,9 @@ from .i18n import tr
 NAME_W = 120  # column with the row names
 ROW_H = 22
 RULER_H = 20
+MOTION_FILL = QColor(94, 148, 168, 110)
+MOTION_EDGE = QColor(70, 120, 140)
+MOTION_ACTIVE = QColor(208, 138, 94, 160)
 
 
 def _vp(ws):
@@ -23,14 +27,14 @@ def _vp(ws):
 
 
 class TimelineStrip(QWidget):
-    """The timeline itself: ruler, camera row, one row per flipbook plane."""
+    """The timeline itself: ruler, camera row, motions row, one row per flipbook plane."""
 
     def __init__(self, ws, parent=None):
         super().__init__(parent)
         self.ws = ws
         self.setMouseTracking(True)
         self.setMinimumHeight(RULER_H + ROW_H * 3)
-        self._drag = None  # ("scrub",) | ("key", plane, old frame, new frame)
+        self._drag = None  # ("scrub",) | ("key", plane, old, new) | ("motion", beat, edge, origin)
 
     # --- Geometry ---
     @property
@@ -42,6 +46,7 @@ class TimelineStrip(QWidget):
         sc = self.ws.scene
         cam = sc.timing.camera_by_id(self._cam_id())
         rows = [("cam", cam, cam.name if cam else tr("Kamera"))]
+        rows.append(("motions", None, tr("Motion")))
         rows += [("plane", p, p.name) for p in timing.flipbook_planes(sc)]
         return rows
 
@@ -111,6 +116,26 @@ class TimelineStrip(QWidget):
                     if prev is not None and abs(prev.mm - pose.mm) > 0.05:  # focal length changes: small "mm"
                         p.setPen(QColor(ui.TEXT))
                         p.drawText(QRectF(x + 6, y, 30, ROW_H), Qt.AlignLeft | Qt.AlignVCenter, "mm")
+            elif kind == "motions":
+                for beat in tm.motions:
+                    a, b = beat.start, beat.end
+                    if self._drag and self._drag[0] == "motion" and self._drag[1] is beat:
+                        a, b = self._drag[3], self._drag[4]
+                    x0, x1 = self._x(a), self._x(b)
+                    if x1 < x0:
+                        x0, x1 = x1, x0
+                    fill = MOTION_ACTIVE if tm.active_motion == beat.id else MOTION_FILL
+                    p.fillRect(QRectF(x0, y + 4, max(x1 - x0, 4), ROW_H - 8), fill)
+                    p.setPen(QPen(MOTION_EDGE, 1.2))
+                    p.drawRect(QRectF(x0, y + 4, max(x1 - x0, 4), ROW_H - 8))
+                    if beat.camera:
+                        p.setBrush(QColor(MOTION_EDGE))
+                        p.setPen(Qt.NoPen)
+                        p.drawEllipse(QPointF(x0 + 5, cy), 3, 3)
+                    label = beat.annotation or timing.target_label(sc, beat)
+                    p.setPen(QColor(ui.TEXT))
+                    p.drawText(QRectF(x0 + 8, y, max(x1 - x0 - 10, 20), ROW_H),
+                               Qt.AlignLeft | Qt.AlignVCenter, label)
             elif kind == "plane":
                 frames = keys.get(obj.id, [])
                 filled = {int(c.frame) for s in sc.strokes for c in s.curves if c.plane_id == obj.id and c.frame is not None}
@@ -148,6 +173,20 @@ class TimelineStrip(QWidget):
                 return row[1], f
         return None
 
+    def _motion_under(self, pos):
+        row = self._row_at(pos.y())
+        if row is None or row[0] != "motions":
+            return None
+        x = pos.x()
+        for beat in self.tm.motions:
+            x0, x1 = self._x(beat.start), self._x(beat.end)
+            if x1 < x0:
+                x0, x1 = x1, x0
+            if x0 - 4 <= x <= x1 + 4:
+                edge = "start" if abs(x - x0) <= 6 else "end" if abs(x - x1) <= 6 else "body"
+                return beat, edge
+        return None
+
     def mousePressEvent(self, e):
         vp = _vp(self.ws)
         if vp is None:
@@ -158,6 +197,9 @@ class TimelineStrip(QWidget):
             hit = self._key_under(pos)
             if hit is not None:
                 return self._key_menu(hit, e.globalPosition().toPoint())
+            mhit = self._motion_under(pos)
+            if mhit is not None:
+                return self._motion_menu(mhit[0], e.globalPosition().toPoint())
             return
         if e.button() != Qt.LeftButton:
             return
@@ -165,6 +207,15 @@ class TimelineStrip(QWidget):
             if row is not None and row[0] == "plane":
                 vp.activate_flipbook(row[1])
             self.update()
+            return
+        mhit = self._motion_under(pos)
+        if mhit is not None:
+            beat, edge = mhit
+            vp.scene.checkpoint()
+            self.tm.active_motion = beat.id
+            self._drag = ("motion", beat, edge, beat.start, beat.end, beat.start, beat.end)
+            vp.set_frame(beat.start if edge == "start" else beat.end if edge == "end" else self._frame_at(pos.x()))
+            self.ws.timing_changed.emit()
             return
         hit = self._key_under(pos)
         if hit is not None:
@@ -182,6 +233,21 @@ class TimelineStrip(QWidget):
         f = self._frame_at(e.position().x())
         if self._drag[0] == "scrub":
             vp.set_frame(f)  # Qt merges several images into one - dragging stays smooth
+        elif self._drag[0] == "motion":
+            _, beat, edge, _a, _b, o0, o1 = self._drag
+            if edge == "start":
+                a, b = min(f, o1), o1
+            elif edge == "end":
+                a, b = o0, max(f, o0)
+            else:
+                span = max(o1 - o0, 0)
+                mid0 = (o0 + o1) // 2
+                a = self.tm.clamp(o0 + (f - mid0))
+                b = self.tm.clamp(a + span)
+                if b - a < span:
+                    a = self.tm.clamp(b - span)
+            self._drag = ("motion", beat, edge, a, b, o0, o1)
+            self.update()
         else:
             self._drag = (*self._drag[:3], f)
             self.update()
@@ -189,18 +255,30 @@ class TimelineStrip(QWidget):
     def mouseReleaseEvent(self, e):
         drag, self._drag = self._drag, None
         vp = _vp(self.ws)
-        if not drag or vp is None or drag[0] != "key":
+        if not drag or vp is None:
             return
-        _, plane, old, new = drag
-        if new != old:
-            if new in timing.flip_keys(vp.scene).get(plane.id, []):
-                vp.notify(tr("Bei {0} liegt schon eine Zeichnung – nicht verschoben").format(timing.frame_label(new)))
+        if drag[0] == "key":
+            _, plane, old, new = drag
+            if new != old:
+                if new in timing.flip_keys(vp.scene).get(plane.id, []):
+                    vp.notify(tr("Bei {0} liegt schon eine Zeichnung – nicht verschoben").format(timing.frame_label(new)))
+                else:
+                    timing.move_key(vp.scene, plane, old, new)
+                    vp.set_frame(new)
+                    vp._timing_changed()
+                    return
+            self.update()
+            return
+        if drag[0] == "motion":
+            _, beat, _edge, a, b, o0, o1 = drag
+            beat.start, beat.end = int(min(a, b)), int(max(a, b))
+            beat.clamp_range(self.tm)
+            if (beat.start, beat.end) != (o0, o1):
+                vp.scene.dirty = True
+                vp._timing_changed(full=False)
             else:
-                timing.move_key(vp.scene, plane, old, new)
-                vp.set_frame(new)
-                vp._timing_changed()
-                return
-        self.update()
+                self.ws.timing_changed.emit()
+            self.update()
 
     def _key_menu(self, hit, at):
         vp = _vp(self.ws)
@@ -210,9 +288,16 @@ class TimelineStrip(QWidget):
                        lambda: (vp.scene.checkpoint(), timing.delete_key(vp.scene, plane, frame), vp._timing_changed()))
         menu.exec(at)
 
+    def _motion_menu(self, beat, at):
+        vp = _vp(self.ws)
+        menu = QMenu(self)
+        menu.addAction(tr("Motion löschen"),
+                       lambda: (vp.scene.checkpoint(), timing.remove_motion(self.tm, beat), vp._timing_changed()))
+        menu.exec(at)
+
 
 class TimelinePanel(QWidget):
-    """Timeline with control bar; plays back (ws.playing)."""
+    """Timeline with control bar; plays back (ws.playing). Motion beats bind components + path + camera."""
 
     def __init__(self, ws, parent=None):
         super().__init__(parent)
@@ -266,6 +351,39 @@ class TimelinePanel(QWidget):
         self.info.setStyleSheet(f"color: {ui.TEXT_DIM};")
         bar.addWidget(self.info)
         lay.addLayout(bar)
+        # Motion beat bar (Calisto Create timeline slice)
+        mbar = QHBoxLayout()
+        mbar.setSpacing(4)
+        for text, tip, slot in (
+                (tr("Bind"), tr("Auswahl (Null/Stroke/Mesh/Plane) an eine Timeline-Spanne binden – ab aktuellem Frame"),
+                 self._bind_selection),
+                (tr("Pfad"), tr("Pfad aus aktivem Stroke oder Flipbook-Zeichnung für die gewählte Motion setzen"),
+                 self._set_path),
+                (tr("Kamera"), tr("Aktuelle Viewport-Kamera als Planungswinkel für die Motion speichern"),
+                 self._capture_cam),
+                (tr("Vorschau"), tr("Gespeicherten Planungswinkel der aktiven Motion anschauen (Esc lässt die Shot-Kamera)"),
+                 self._preview_cam),
+                (tr("Löschen"), tr("Aktive Motion löschen"), self._delete_motion)):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.clicked.connect(slot)
+            mbar.addWidget(b)
+        mbar.addWidget(QLabel(tr("Annotation")))
+        self.ann_edit = QLineEdit()
+        self.ann_edit.setPlaceholderText(tr("Kurzlabel der Motion"))
+        self.ann_edit.setFixedWidth(120)
+        self.ann_edit.editingFinished.connect(self._ann_edited)
+        mbar.addWidget(self.ann_edit)
+        mbar.addWidget(QLabel(tr("Text")))
+        self.text_edit = QLineEdit()
+        self.text_edit.setPlaceholderText(tr("Bewegungsabsicht – was macht das Teil hier?"))
+        self.text_edit.setMinimumWidth(180)
+        self.text_edit.editingFinished.connect(self._text_edited)
+        mbar.addWidget(self.text_edit, 1)
+        self.motion_info = QLabel()
+        self.motion_info.setStyleSheet(f"color: {ui.TEXT_DIM};")
+        mbar.addWidget(self.motion_info)
+        lay.addLayout(mbar)
         self.strip = TimelineStrip(ws, self)
         lay.addWidget(self.strip, 1)
         self.timer = QTimer(self)
@@ -303,6 +421,7 @@ class TimelinePanel(QWidget):
         if getattr(self.ws, "play_requested", None) is not None and self.ws.play_requested != self.ws.playing:
             self.set_playing(self.ws.play_requested)
         self._update_info()
+        self._update_motion_fields()
         self.strip.updateGeometry()
         self.strip.update()
 
@@ -312,6 +431,7 @@ class TimelinePanel(QWidget):
             self.frame_spin.setValue(frame)
             self.frame_spin.blockSignals(False)
         self._update_info()
+        self._update_motion_fields()
         self.strip.update()
 
     def _update_info(self):
@@ -326,6 +446,138 @@ class TimelinePanel(QWidget):
                           else tr("{0}: hier gilt {1} – Malen oder Radieren übernimmt sie als neue Zeichnung bei {2}").format(
                               plane.name, timing.frame_label(shown) if shown is not None else tr("nichts"),
                               timing.frame_label(sc.timing.frame)))
+
+    def _update_motion_fields(self):
+        beat = self.ws.scene.timing.active_beat()
+        for edit, value in ((self.ann_edit, beat.annotation if beat else ""),
+                            (self.text_edit, beat.text if beat else "")):
+            if not edit.hasFocus() and edit.text() != value:
+                edit.blockSignals(True)
+                edit.setText(value)
+                edit.blockSignals(False)
+        if beat is None:
+            self.motion_info.setText(tr("Keine Motion – Bind bindet Auswahl an Span"))
+            return
+        bits = [f"{timing.frame_label(beat.start)}–{timing.frame_label(beat.end)}",
+                timing.target_label(self.ws.scene, beat)]
+        if beat.path_stroke_id or beat.path_plane_id:
+            bits.append(tr("Pfad"))
+        if beat.camera:
+            bits.append(tr("Kamera"))
+        self.motion_info.setText(" · ".join(bits))
+
+    def _active_beat(self, need=True):
+        beat = self.ws.scene.timing.active_beat()
+        if beat is None and need:
+            vp = _vp(self.ws)
+            if vp is not None:
+                vp.notify(tr("Erst eine Motion wählen oder mit Bind anlegen"))
+        return beat
+
+    def _bind_selection(self):
+        vp = _vp(self.ws)
+        if vp is None:
+            return
+        vp.scene.checkpoint()
+        beat = timing.bind_selection(vp.scene, list(self.ws.selection))
+        # Prefer flipbook plane as path when painting in Shots
+        plane = vp.scene.active_plane if vp.scene.active_plane.flipbook else None
+        if plane is not None:
+            timing.set_motion_path(beat, vp.scene, plane_id=plane.id)
+        vp.notify(tr("Motion gebunden: {0} ({1}–{2})").format(
+            timing.target_label(vp.scene, beat), timing.frame_label(beat.start), timing.frame_label(beat.end)))
+        vp._timing_changed()
+
+    def _set_path(self):
+        vp = _vp(self.ws)
+        beat = self._active_beat()
+        if vp is None or beat is None:
+            return
+        vp.scene.checkpoint()
+        stroke = None
+        for oid in self.ws.selection:
+            obj = vp.scene.object_by_id(oid)
+            if obj is not None and getattr(obj, "curves", None) is not None:
+                stroke = obj
+                break
+        if stroke is None and vp.scene.active_stroke is not None:
+            stroke = vp.scene.active_stroke
+        plane = vp.scene.active_plane if vp.scene.active_plane.flipbook else None
+        timing.set_motion_path(beat, vp.scene,
+                               stroke_id=stroke.id if stroke is not None else None,
+                               plane_id=plane.id if plane is not None and stroke is None else (
+                                   plane.id if plane is not None else None))
+        if beat.path_stroke_id is None and beat.path_plane_id is None:
+            return vp.notify(tr("Kein Pfad – Stroke wählen oder Flipbook bemalen"))
+        pts = timing.path_points(vp.scene, beat)
+        vp.notify(tr("Pfad gesetzt ({0} Punkte)").format(len(pts)))
+        vp._timing_changed()
+
+    def _capture_cam(self):
+        vp = _vp(self.ws)
+        beat = self._active_beat()
+        if vp is None or beat is None:
+            return
+        vp.scene.checkpoint()
+        look = vp._look_cam() if hasattr(vp, "_look_cam") else None
+        if look is not None:
+            pose = timing.pose_at(look, vp.scene.timing.frame)
+            mm = pose.mm
+            state = pose.state()
+        else:
+            tan = getattr(vp, "_cam_tan", None)
+            mm = timing.tan_to_mm(tan) if tan is not None else 35.0
+            state = vp.cam.state()
+        timing.capture_motion_camera(beat, state, mm)
+        vp.notify(tr("Kamerawinkel für Motion gespeichert ({0} mm)").format(round(mm, 1)))
+        vp._timing_changed()
+
+    def _preview_cam(self):
+        vp = _vp(self.ws)
+        beat = self._active_beat()
+        if vp is None or beat is None:
+            return
+        state = timing.camera_state(beat)
+        if state is None:
+            return vp.notify(tr("Diese Motion hat noch keinen Kamerawinkel – Kamera drücken"))
+        target, dist, rot, mm = state
+        if vp.cam.ortho:
+            vp.cam.ortho = False
+        vp.cam.set_state(target, dist, rot)
+        vp._cam_tan = timing.mm_to_tan(mm)
+        vp.update_view()
+        vp.notify(tr("Vorschau: Planungswinkel von „{0}“").format(beat.annotation or timing.target_label(vp.scene, beat)))
+
+    def _delete_motion(self):
+        vp = _vp(self.ws)
+        beat = self._active_beat()
+        if vp is None or beat is None:
+            return
+        vp.scene.checkpoint()
+        timing.remove_motion(vp.scene.timing, beat)
+        vp._timing_changed()
+
+    def _ann_edited(self):
+        beat = self.ws.scene.timing.active_beat()
+        if beat is None:
+            return
+        text = self.ann_edit.text().strip()
+        if text != beat.annotation:
+            self.ws.scene.checkpoint()
+            beat.annotation = text
+            self.ws.scene.dirty = True
+            self.ws.timing_changed.emit()
+
+    def _text_edited(self):
+        beat = self.ws.scene.timing.active_beat()
+        if beat is None:
+            return
+        text = self.text_edit.text().strip()
+        if text != beat.text:
+            self.ws.scene.checkpoint()
+            beat.text = text
+            self.ws.scene.dirty = True
+            self.ws.timing_changed.emit()
 
     def _range_edited(self):
         vp = _vp(self.ws)
