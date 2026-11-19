@@ -26,6 +26,23 @@ def nearest_axis_back(back):
     return max((np.array(a, float) for _, a in AXIS_VIEWS), key=lambda a: float(a @ back))
 
 
+AXIS_SNAP_RAD_PER_PX = 0.02  # Alt orbit snap: ~40 px of drag leaves an axis view (45°), a few px stay put
+
+
+def axis_snap_back(start_rot, acc_dx, acc_dy):
+    """World axis an Alt orbit lands on after a drag of (acc_dx, acc_dy) px in total.
+    The whole drag swings the START view along a great circle of its own basis (columns right, up, back), so the
+    drag passes on through the axis views (Front -> Right -> Back -> Left ...) also when it began in one. Same
+    direction as Camera.orbit: drag right moves the camera toward -right, drag down (screen +y) toward +up."""
+    right0, up0, back0 = start_rot[:, 0], start_rot[:, 1], start_rot[:, 2]
+    length = math.hypot(acc_dx, acc_dy)
+    if length == 0.0:
+        return nearest_axis_back(back0)
+    swing = (-acc_dx * right0 + acc_dy * up0) / length
+    angle = length * AXIS_SNAP_RAD_PER_PX
+    return nearest_axis_back(math.cos(angle) * back0 + math.sin(angle) * swing)
+
+
 class NavigationMixin:
     # --- Camera moves ----------------------------------------------------
     def fly_to(self, target, dist, rot):
@@ -118,13 +135,24 @@ class NavigationMixin:
         self.update_view()
 
     def orbit_axis_snap(self, dx, dy):
-        """Orbit then quantize to nearest world axis (Blender Alt-during-view-rotate)."""
+        """Alt orbit (Blender Alt during view rotate): instant orthographic world-axis view. The drag is summed from
+        the pose the snap began in (mousePress records it) and swung from there (axis_snap_back) – not orbited step
+        by step from the snapped pose, which a mouse step of 10-20 px could never leave."""
+        start = self._orbit_snap_start
+        if start is None or self.cam.rot is not getattr(self, "_orbit_snap_rot", self.cam.rot):
+            # Alt came during the drag, or the camera turned freely since the last snap (Alt let go): begin here
+            start = self._orbit_snap_start = self.cam.state()
+            self._orbit_snap_acc = [0.0, 0.0]
         if self._persp_view is None and not self.cam.ortho:
             self._persp_view = self.cam.state()
-        self.cam.orbit(dx * 1.35, dy * 1.35, self._orbit_pivot)
-        axis = nearest_axis_back(self.cam.back)
-        self.cam.rot = view_for_back(axis)
+        self._orbit_snap_acc[0] += dx
+        self._orbit_snap_acc[1] += dy
+        target, dist, rot0 = start
+        axis = axis_snap_back(rot0, *self._orbit_snap_acc)
+        rot = view_for_back(axis)
+        self.cam.set_state(target.copy(), dist, rot)  # copy: set_state keeps the array, the start must stay intact
         self.cam.ortho = True
+        self._orbit_snap_rot = rot
         prev = getattr(self, "_orbit_snap_axis", None)
         if prev is None or float(np.linalg.norm(prev - axis)) > 1e-6:
             self._orbit_snap_axis = axis.copy()

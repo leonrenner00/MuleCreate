@@ -620,6 +620,8 @@ class Viewport(SelectionMixin, PickingMixin, ComponentEditMixin, FreeDrawMixin, 
             self._mode = {Qt.LeftButton: "orbit", Qt.MiddleButton: "pan", Qt.RightButton: "dolly"}.get(b)
             self._orbit_alt_snap = bool(mods & Qt.AltModifier) and self._mode == "orbit"
             self._orbit_snap_axis = None
+            self._orbit_snap_start = self.cam.state() if self._orbit_alt_snap else None  # Alt snap swings this pose
+            self._orbit_snap_acc = [0.0, 0.0]  # drag summed since the start pose (orbit_axis_snap)
             self._orbit_pivot = self._pick_point(pos) if self._mode == "orbit" else None
             return self.update_view()  # only the camera moves right away: no rebuild at the start
         elif b == Qt.MiddleButton:
@@ -632,6 +634,8 @@ class Viewport(SelectionMixin, PickingMixin, ComponentEditMixin, FreeDrawMixin, 
                 self._mode = "orbit"
                 self._orbit_alt_snap = bool(mods & Qt.AltModifier)
                 self._orbit_snap_axis = None
+                self._orbit_snap_start = self.cam.state() if self._orbit_alt_snap else None  # Alt snap swings this pose
+                self._orbit_snap_acc = [0.0, 0.0]  # drag summed since the start pose (orbit_axis_snap)
                 self._orbit_pivot = self._pick_point(pos)
             return self.update_view()
         elif b == Qt.RightButton and mods & Qt.ControlModifier and self._width_targets(mods):
