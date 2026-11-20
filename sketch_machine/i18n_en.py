@@ -1790,6 +1790,22 @@ EN = {
         'The file no longer exists:\n{0}',
     'Einstellungen':
         'Settings',
+    'Werkzeugkürzel':
+        'Tool shortcuts',
+    'Vorgabe:':
+        'Preset:',
+    'Mule (T verschieben, R drehen, E skalieren)':
+        'Mule (T move, R rotate, E scale)',
+    'Blender (G verschieben, R drehen, S skalieren)':
+        'Blender (G move, R rotate, S scale)',
+    'Eigen':
+        'Custom',
+    'Blender legt Verschieben, Drehen und Skalieren auf G, R und S. S schaltet dann nicht mehr den Malmodus um. Alt+G und Space+G bleiben wie bisher.':
+        'Blender puts move, rotate and scale on G, R and S. S no longer toggles paint mode. Alt+G and Space+G stay as they are.',
+    'Drehen':
+        'Rotate',
+    'Jede Taste darf nur ein Werkzeug haben.':
+        'Each key can belong to only one tool.',
     'Backup':
         'Backup',
     'Automatisch Backups anlegen':

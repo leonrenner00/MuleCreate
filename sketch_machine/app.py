@@ -217,6 +217,8 @@ class MainWindow(QMainWindow):
                                          _open_folder(backup.folder_for(self.path, backup.REVIEW_FOLDER))))
         rform.addRow(rfolder)
         lay.addWidget(rgroup)
+        from . import shortcuts
+        apply_shortcuts = shortcuts.add_settings_group(lay)
         self._review_keep_spin = rkeep  # (Tests)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(dlg.accept)
@@ -226,6 +228,7 @@ class MainWindow(QMainWindow):
         if dlg.exec() == QDialog.Accepted:
             backup.set_options(on.isChecked(), spin.value())
             backup.set_review_keep(rkeep.value())
+            apply_shortcuts()
             self._restart_backup_timer()
 
     @property

@@ -5,6 +5,7 @@ Tab → selection kinds (point / edge / face); short tap still toggles draw ↔ 
 """
 from .common import *  # noqa: F401,F403
 from ..i18n import tr
+from ..shortcuts import letter
 
 PIE_INNER = 28.0  # dead zone: release here = cancel / tap fallback
 PIE_OUTER = 118.0
@@ -36,13 +37,13 @@ class PieMixin:
         space = self.gizmo.space
         tool = self.gizmo.tool
         return [
-            {"id": "translate", "label": tr("Verschieben"), "hint": "T",
+            {"id": "translate", "label": tr("Verschieben"), "hint": letter("translate"),
              "active": tool == "translate",
              "run": lambda: self.set_transform_tool("translate")},
-            {"id": "rotate", "label": tr("Drehen"), "hint": "R",
+            {"id": "rotate", "label": tr("Drehen"), "hint": letter("rotate"),
              "active": tool == "rotate",
              "run": lambda: self.set_transform_tool("rotate")},
-            {"id": "scale", "label": tr("Skalieren"), "hint": "E",
+            {"id": "scale", "label": tr("Skalieren"), "hint": letter("scale"),
              "active": tool == "scale",
              "run": lambda: self.set_transform_tool("scale")},
             {"id": "world", "label": tr("Welt"), "hint": "",

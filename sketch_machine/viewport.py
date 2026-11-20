@@ -45,7 +45,7 @@ from .vp.display_lists import DisplayListMixin
 from .vp.nulls import NullMixin
 from .vp.timing_view import TimingViewMixin
 from .vp.pie import PieMixin
-from . import i18n, pictures
+from . import i18n, pictures, shortcuts
 from .i18n import tr
 
 NAV_MODES = ("orbit", "pan", "dolly")  # mouse camera modes: change only the view, never the scene
@@ -1195,7 +1195,8 @@ class Viewport(SelectionMixin, PickingMixin, ComponentEditMixin, FreeDrawMixin, 
             if not self.select_mode:
                 self.set_select_mode(True)
             return self.open_pie("transform", k)
-        if k == Qt.Key_S and not mods and self._mode is None and not self.select_mode and not self.notes_mode:
+        if (k == Qt.Key_S and not mods and shortcuts.action_for(k) is None and self._mode is None
+                and not self.select_mode and not self.notes_mode):
             if not e.isAutoRepeat():
                 self.set_paint_mode(not self.ws.paint_mode)  # S in drawing: paint mode on/off
             return
@@ -1223,16 +1224,16 @@ class Viewport(SelectionMixin, PickingMixin, ComponentEditMixin, FreeDrawMixin, 
         components_keys = {Qt.Key_1: "point", Qt.Key_2: "edge", Qt.Key_3: "face"}
         # Drawing: base plane by the axis you look at it from - X: side (ZY), Y: ground (XZ), Z: front (XY)
         planes = {Qt.Key_Y: 0, Qt.Key_Z: 1, Qt.Key_X: 2}
-        tools = {Qt.Key_T: "translate", Qt.Key_R: "rotate", Qt.Key_E: "scale"}
         step = ("key", self.scene.active_plane.id)
+        tool_key = shortcuts.action_for(k) if not mods else None
         if k in components_keys and self.select_mode:  # edit: point / edge / surface as in Houdini
             return self.set_component(components_keys[k])
         if k in planes and not self.select_mode and not mods:
             self.activate_preset(planes[k])
         elif k == Qt.Key_4:
             self.activate_last_custom()
-        elif k in tools:
-            self.gizmo.tool = tools[k]
+        elif tool_key is not None and not e.isAutoRepeat():
+            self.gizmo.tool = tool_key
             self._paste_restore = None  # deliberately chosen: stays
             self._leave_value_tool()  # transforming ends hardness/smoothing
             if not self.select_mode:  # transforming exists only in selection mode

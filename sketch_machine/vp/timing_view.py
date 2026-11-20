@@ -10,6 +10,7 @@ import hashlib
 
 from .common import *  # noqa: F401,F403
 from ..i18n import tr
+from ..shortcuts import action_for
 
 timing = timing_mod
 
@@ -632,8 +633,8 @@ class TimingViewMixin:
             else:
                 self.notes_tool.key(e)
             return True
-        if k in (Qt.Key_T, Qt.Key_R, Qt.Key_E) and not mods:
-            self.set_timing_tool({Qt.Key_T: "translate", Qt.Key_R: "rotate", Qt.Key_E: "scale"}[k])
+        if not mods and (tool := action_for(k)):
+            self.set_timing_tool(tool)
             return True
         if k in (Qt.Key_Tab, Qt.Key_Backtab):  # as from the notes: back to drawing
             self.set_select_mode(False)
